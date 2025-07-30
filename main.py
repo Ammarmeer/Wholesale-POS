@@ -16,6 +16,8 @@ import os
 import tempfile
 import subprocess
 from category_management import CategoryManagementDialog
+from inventory_management import InventoryManagementDialog, StockAdjustmentDialog
+from customer_management import CustomerManagementDialog, CustomerSelectionDialog
 # ReportLab imports for professional PDF receipts
 try:
     from reportlab.pdfgen import canvas
@@ -1010,6 +1012,7 @@ class POSMainWindow(QMainWindow):
         self.discount_amount = 0.0
         self.discount_percentage = 0.0
         self.tax_rate = 0.15  
+        self.current_customer = None  # Add this line
         self.tax_enabled = True
         self.current_payment = 0.0
         self.current_quantity_input = ""
@@ -2123,7 +2126,7 @@ class POSMainWindow(QMainWindow):
                 pass
     
     def create_receipt(self):
-        """Create professional PDF receipt using ReportLab for 80x297mm paper with compact layout"""
+        """Create professional PDF receipt using ReportLab for 80x297mm paper with customer info"""
         if not REPORTLAB_AVAILABLE:
             # Fallback to text receipt if ReportLab not available
             return self.create_text_receipt()
@@ -2133,7 +2136,7 @@ class POSMainWindow(QMainWindow):
         
         # Receipt configuration for 80x297mm paper
         receipt_width = 80 * mm  # 80mm width
-        base_height = 120 * mm   # Base height
+        base_height = 130 * mm   # Increased base height for customer info
         item_height = 5 * mm     # Height per item
         
         # Calculate dynamic height based on items (max 297mm)
@@ -2151,12 +2154,6 @@ class POSMainWindow(QMainWindow):
             left_margin = 1 * mm
             right_margin = 1 * mm
             usable_width = receipt_width - left_margin - right_margin  # 78mm usable
-            
-            # Compact column layout
-            item_col = left_margin              # Item name: 0-45mm (45mm width)
-            qty_col = left_margin + 45 * mm     # Qty: 45-55mm (10mm width)
-            price_col = left_margin + 55 * mm   # Price: 55-67mm (12mm width) 
-            total_col = left_margin + 67 * mm   # Total: 67-78mm (11mm width)
             
             # Store Header
             c.setFont("Helvetica-Bold", 11)
@@ -2185,43 +2182,50 @@ class POSMainWindow(QMainWindow):
             c.drawString(left_margin, y_position, f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
             y_position -= 3 * mm
             c.drawString(left_margin, y_position, "Cashier: POS User")
-            y_position -= 4 * mm
+            y_position -= 3 * mm
             
-            # Items Header with short labels to fit in 80mm
+            # Customer information if available
+            if self.current_customer:
+                c.drawString(left_margin, y_position, f"Customer: {self.current_customer['name']}")
+                y_position -= 3 * mm
+            
+            y_position -= 1 * mm
+            
+            # Items Header
             c.line(left_margin, y_position, receipt_width - right_margin, y_position)
             y_position -= 3 * mm
             
-            c.setFont("Helvetica-Bold", 7)  # Smaller font for headers
-            c.drawString(item_col, y_position, "Item")
-            c.drawString(qty_col, y_position, "Qty")
-            c.drawString(price_col, y_position, "Price")
-            c.drawString(total_col, y_position, "Total")  # Shortened to "Tot" to fit
+            c.setFont("Helvetica-Bold", 7)
+            c.drawString(left_margin, y_position, "Item")
+            c.drawString(left_margin + 45 * mm, y_position, "Qty")
+            c.drawString(left_margin + 55 * mm, y_position, "Price")
+            c.drawString(left_margin + 67 * mm, y_position, "Tot")
             y_position -= 3 * mm
             
             c.line(left_margin, y_position, receipt_width - right_margin, y_position)
             y_position -= 3 * mm
             
             # Items with compact alignment
-            c.setFont("Helvetica", 6)  # Smaller font for items
+            c.setFont("Helvetica", 6)
             for item in self.order_items:
                 # Item name (truncate to fit in 45mm ≈ 18 chars at 6pt)
                 item_name = item['description']
                 if len(item_name) > 18:
                     item_name = item_name[:15] + "..."
                 
-                c.drawString(item_col, y_position, item_name)
+                c.drawString(left_margin, y_position, item_name)
                 
-                # Quantity (right-aligned in 10mm space)
+                # Quantity
                 qty_text = f"{item['quantity']:.1f}"
-                c.drawRightString(qty_col + 9 * mm, y_position, qty_text)
+                c.drawRightString(left_margin + 54 * mm, y_position, qty_text)
                 
-                # Price (right-aligned in 12mm space)
-                price_text = f"{item['price']:.0f}"  # No decimals to save space
-                c.drawRightString(price_col + 11 * mm, y_position, price_text)
+                # Price
+                price_text = f"{item['price']:.0f}"
+                c.drawRightString(left_margin + 66 * mm, y_position, price_text)
                 
-                # Total (right-aligned in 11mm space)
-                total_text = f"{item['total']:.0f}"  # No decimals to save space
-                c.drawRightString(total_col + 10 * mm, y_position, total_text)
+                # Total
+                total_text = f"{item['total']:.0f}"
+                c.drawRightString(left_margin + 77 * mm, y_position, total_text)
                 
                 y_position -= 3.5 * mm
                 
@@ -2289,6 +2293,11 @@ class POSMainWindow(QMainWindow):
             c.setFont("Helvetica", 8)
             c.drawCentredString(receipt_width / 2, y_position, "Thank you for your business!")
             y_position -= 3 * mm
+            
+            if self.current_customer:
+                c.drawCentredString(receipt_width / 2, y_position, f"Thank you, {self.current_customer['name']}!")
+                y_position -= 3 * mm
+            
             c.drawCentredString(receipt_width / 2, y_position, "Please come again!")
             y_position -= 4 * mm
             
@@ -2324,12 +2333,13 @@ class POSMainWindow(QMainWindow):
             print(f"Error creating PDF receipt: {e}")
             # Return text receipt as fallback
             return self.create_text_receipt()
-        
+
+    # Update the create_text_receipt method to include customer info
     def create_text_receipt(self):
-        """Compact text receipt optimized for 80mm thermal paper (32 chars width)"""
+        """Compact text receipt with customer info for 80mm thermal paper"""
         receipt_lines = []
         
-        # Header (32 characters wide for 80mm paper - more realistic)
+        # Header (32 characters wide for 80mm paper)
         receipt_lines.append("================================")
         receipt_lines.append("     WHOLESALE DEALER POS")
         receipt_lines.append("      Your Business Name")
@@ -2344,6 +2354,11 @@ class POSMainWindow(QMainWindow):
         receipt_lines.append(f"Receipt #: {receipt_number}")
         receipt_lines.append(f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
         receipt_lines.append(f"Cashier: POS User")
+        
+        # Customer info if available
+        if self.current_customer:
+            receipt_lines.append(f"Customer: {self.current_customer['name'][:22]}")
+        
         receipt_lines.append("--------------------------------")
         receipt_lines.append("")
         
@@ -2362,7 +2377,7 @@ class POSMainWindow(QMainWindow):
             # Total (5 chars)
             total_str = f"{item['total']:.0f}".rjust(5)
             
-            # Create 32-char line: 15 + 1 + 3 + 1 + 4 + 1 + 5 = 30 chars (with spaces)
+            # Create 32-char line
             line = f"{name} {qty_str} {price_str} {total_str}"
             receipt_lines.append(line)
         
@@ -2396,6 +2411,11 @@ class POSMainWindow(QMainWindow):
         # Footer
         receipt_lines.append("================================")
         receipt_lines.append("    Thank you for your business!")
+        
+        if self.current_customer:
+            customer_name = self.current_customer['name'][:20]
+            receipt_lines.append(f"    Thank you, {customer_name}!")
+        
         receipt_lines.append("       Please come again!")
         receipt_lines.append("")
         receipt_lines.append("      Return Policy: 30 days")
@@ -2415,7 +2435,7 @@ class POSMainWindow(QMainWindow):
         }
         
         return "\n".join(receipt_lines)
-    
+        
     def save_sale_to_database(self):
         """Save the sale to database"""
         if not self.order_items:
@@ -2585,9 +2605,9 @@ class POSMainWindow(QMainWindow):
         """Start a new order"""
         if self.order_items:
             reply = QMessageBox.question(self, "New Order", 
-                                       "Current order will be lost. Continue?",
-                                       QMessageBox.StandardButton.Yes | 
-                                       QMessageBox.StandardButton.No)
+                                    "Current order will be lost. Continue?",
+                                    QMessageBox.StandardButton.Yes | 
+                                    QMessageBox.StandardButton.No)
             if reply == QMessageBox.StandardButton.No:
                 return
         
@@ -2596,8 +2616,12 @@ class POSMainWindow(QMainWindow):
         self.discount_amount = 0.0
         self.discount_percentage = 0.0
         self.current_quantity_input = ""
+        self.current_customer = None  # Clear customer selection
         self.update_order_display()
         self.calculate_totals()
+        
+        # Update status bar
+        self.statusBar().showMessage("New order started - Ready", 2000)
     
     def open_product_management(self):
         """Open product management dialog"""
@@ -2625,13 +2649,32 @@ class POSMainWindow(QMainWindow):
             QMessageBox.critical(self, "Error", f"Failed to open category management: {str(e)}")
     
     def open_inventory_management(self):
-        QMessageBox.information(self, "Inventory Management", "Inventory management window will be implemented in separate module.")
-    
+        """Open inventory management dialog"""
+        try:
+            dialog = InventoryManagementDialog(self)
+            dialog.exec()
+            # Refresh products after dialog closes
+            self.load_products_from_database()
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to open inventory management: {str(e)}")
+
     def open_stock_adjustment(self):
-        QMessageBox.information(self, "Stock Adjustment", "Stock adjustment window will be implemented in separate module.")
+        """Open stock adjustment dialog"""
+        try:
+            dialog = StockAdjustmentDialog(self)
+            if dialog.exec() == QDialog.DialogCode.Accepted:
+                self.load_products_from_database()  # Refresh products
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to open stock adjustment: {str(e)}")
     
     def open_customer_management(self):
-        QMessageBox.information(self, "Customer Management", "Customer management window will be implemented in separate module.")
+        """Open customer management dialog"""
+        try:
+            dialog = CustomerManagementDialog(self)
+            dialog.exec()
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to open customer management: {str(e)}")
+
     
     def open_vendor_management(self):
         QMessageBox.information(self, "Vendor Management", "Vendor management window will be implemented in separate module.")
@@ -2744,7 +2787,26 @@ Built with: PyQt6 + SQLite
             self.calculate_totals()
     
     def select_customer(self):
-        QMessageBox.information(self, "Customer Selection", "Customer selection will be implemented.")
+        """Open customer selection dialog for POS"""
+        try:
+            dialog = CustomerSelectionDialog(self)
+            if dialog.exec() == QDialog.DialogCode.Accepted:
+                if dialog.selected_customer:
+                    self.current_customer = dialog.selected_customer
+                    self.statusBar().showMessage(
+                        f"Customer selected: {dialog.selected_customer['name']}", 3000
+                    )
+                    
+                    # Update customer button text if you want
+                    customer_text = f"Customer: {dialog.selected_customer['name'][:10]}..."
+                    # You can update a customer display label here if you have one
+                    
+                else:
+                    self.current_customer = None
+                    self.statusBar().showMessage("No customer selected", 2000)
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to open customer selection: {str(e)}")
+
     
     def toggle_tax(self):
         """Toggle tax calculation"""
@@ -2813,7 +2875,7 @@ Built with: PyQt6 + SQLite
             self.remove_order_item(current_row)
     
     def process_payment(self):
-        """Process payment for the order"""
+        """Process payment for the order with customer support"""
         if not self.order_items:
             QMessageBox.warning(self, "Warning", "No items in order!")
             return
@@ -2849,35 +2911,78 @@ Built with: PyQt6 + SQLite
         # Create receipt (PDF or text)
         receipt_result = self.create_receipt()
         
-        # Save sale to database
+        # Save sale to database with customer information
         sale_saved = self.save_sale_to_database()
         
-        # Check if receipt_result is a file path (PDF) or text content
-        if receipt_result and os.path.exists(str(receipt_result)):
-            # It's a PDF file path
-            if REPORTLAB_AVAILABLE:
-                QMessageBox.information(self, "Payment Complete", 
-                                    f"Payment processed successfully!\n\n"
-                                    f"💾 Sale {'saved' if sale_saved else 'not saved'} to database\n"
-                                    f"🖨️ Ready for thermal printer\n\n"
-                                    f"Receipt: {self.last_receipt_data.get('receipt_number', 'N/A')}")
+        # Handle customer transaction if customer is selected
+        if self.current_customer and sale_saved:
+            try:
+                conn = sqlite3.connect(self.db_manager.db_path)
+                cursor = conn.cursor()
                 
-                # Show PDF dialog
-                pdf_dialog = PDFReceiptDialog(receipt_result, self)
-                pdf_dialog.exec()
-            else:
-                QMessageBox.information(self, "Payment Complete", 
-                                    "Payment processed successfully!\n"
-                                    "Install ReportLab for professional PDF receipts:\n"
-                                    "pip install reportlab")
-        elif isinstance(receipt_result, str):
-            # It's text content (fallback when ReportLab fails or not available)
+                # Add sale transaction to customer account
+                cursor.execute('''
+                    INSERT INTO customer_transactions 
+                    (customer_id, transaction_type, amount, description, reference_number)
+                    VALUES (?, ?, ?, ?, ?)
+                ''', (self.current_customer['id'], 'SALE', total, 
+                    f"POS Sale - {len(self.order_items)} items", 
+                    self.last_receipt_data.get('receipt_number', '')))
+                
+                # Update customer balance and statistics
+                cursor.execute('''
+                    UPDATE customers 
+                    SET current_balance = current_balance + ?,
+                        total_purchases = total_purchases + ?,
+                        last_purchase_date = ?
+                    WHERE id = ?
+                ''', (total, total, datetime.now().isoformat(), self.current_customer['id']))
+                
+                # Update the sale record with customer information
+                cursor.execute('''
+                    UPDATE sales 
+                    SET customer_id = ?, customer_name = ?
+                    WHERE receipt_number = ?
+                ''', (self.current_customer['id'], self.current_customer['name'], 
+                    self.last_receipt_data.get('receipt_number', '')))
+                
+                conn.commit()
+                conn.close()
+                
+            except Exception as e:
+                print(f"Error updating customer transaction: {e}")
+        
+        # Show receipt based on type
+        if isinstance(receipt_result, str):
+            # Text receipt
             receipt_dialog = ReceiptDialog(receipt_result, self)
             receipt_dialog.receipt_saved = sale_saved
             receipt_dialog.exec()
         else:
-            # Receipt creation failed
-            QMessageBox.warning(self, "Warning", "Payment processed but receipt creation failed!")
+            # PDF receipt
+            if receipt_result and os.path.exists(receipt_result):
+                if REPORTLAB_AVAILABLE:
+                    customer_info = ""
+                    if self.current_customer:
+                        customer_info = f"\n👤 Customer: {self.current_customer['name']}"
+                    
+                    QMessageBox.information(self, "Payment Complete", 
+                                        f"Payment processed successfully!{customer_info}\n\n"
+                                        f"📄 Professional PDF receipt created\n"
+                                        f"💾 Sale {'saved' if sale_saved else 'not saved'} to database\n"
+                                        f"🖨️ Ready for thermal printer\n\n"
+                                        f"Receipt: {self.last_receipt_data.get('receipt_number', 'N/A')}")
+                    
+                    # Show PDF dialog
+                    pdf_dialog = PDFReceiptDialog(receipt_result, self)
+                    pdf_dialog.exec()
+                else:
+                    QMessageBox.information(self, "Payment Complete", 
+                                        "Payment processed successfully!\n"
+                                        "Install ReportLab for professional PDF receipts:\n"
+                                        "pip install reportlab")
+            else:
+                QMessageBox.warning(self, "Warning", "Payment processed but receipt creation failed!")
         
         # Ask if want to start new order
         reply = QMessageBox.question(self, "New Order", 
@@ -2886,10 +2991,6 @@ Built with: PyQt6 + SQLite
                                 QMessageBox.StandardButton.No)
         if reply == QMessageBox.StandardButton.Yes:
             self.new_order()
-        
-    def resizeEvent(self, event):
-        """Handle window resize for responsiveness"""
-        super().resizeEvent(event)
 
 def main():
     app = QApplication(sys.argv)
