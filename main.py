@@ -4,7 +4,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QLineEdit, QTableWidget, QTableWidgetItem, 
                              QFrame, QScrollArea, QCheckBox, QComboBox,
                              QMessageBox, QSplitter, QHeaderView, QMenuBar,
-                             QDialog, QDialogButtonBox, QTextEdit, QSpinBox,
+                             QDialog, QDialogButtonBox, QTextEdit, QSpinBox,QListWidget,
                              QDoubleSpinBox, QInputDialog, QFileDialog)
 from PyQt6.QtCore import Qt, QSize, pyqtSignal, QDateTime, QTimer
 from PyQt6.QtGui import QFont, QPalette, QColor, QPixmap, QIcon, QAction, QKeySequence, QTextDocument
@@ -15,7 +15,7 @@ import json
 import os
 import tempfile
 import subprocess
-
+from category_management import CategoryManagementDialog
 # ReportLab imports for professional PDF receipts
 try:
     from reportlab.pdfgen import canvas
@@ -275,50 +275,66 @@ class OrderTable(QTableWidget):
         self.init_ui()
         
     def init_ui(self):
+        """Initialize OrderTable with optimized column sizing"""
         self.setColumnCount(6)
         self.setHorizontalHeaderLabels(['DESCRIPTION', 'QTY', 'PRICE', 'TOTAL', 'ACTION', 'BARCODE'])
         
-        # Set column widths optimized for right panel
+        # Get header and set resize modes
         header = self.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)  # Description takes remaining space
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
-        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
-        header.setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
-        header.setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)
         
-        self.setColumnWidth(1, 60)   # QTY
-        self.setColumnWidth(2, 80)   # PRICE
-        self.setColumnWidth(3, 90)   # TOTAL
-        self.setColumnWidth(4, 60)   # ACTION
-        self.setColumnWidth(5, 100)  # BARCODE
+        # Fixed column widths optimized for the right panel
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)  # Description - takes remaining space
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)    # QTY - fixed width
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)    # PRICE - fixed width  
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)    # TOTAL - fixed width
+        header.setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)    # ACTION - fixed width
+        header.setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)    # BARCODE - fixed width
         
-        # Set minimum section sizes to prevent over-compression
-        header.setMinimumSectionSize(50)
+        # Set optimal fixed widths for right panel (assuming ~400px total width)
+        self.setColumnWidth(1, 50)   # QTY - smaller
+        self.setColumnWidth(2, 70)   # PRICE - medium
+        self.setColumnWidth(3, 80)   # TOTAL - medium
+        self.setColumnWidth(4, 50)   # ACTION - smaller for button
+        self.setColumnWidth(5, 100)  # BARCODE - medium
+        
+        # Description will take remaining space (~50px) which should be enough
         
         # Hide barcode column by default
         self.setColumnHidden(5, True)
         
-        # Styling
+        # Set minimum section sizes to prevent over-compression
+        header.setMinimumSectionSize(40)
+        
+        # Styling for better visibility
         self.setStyleSheet("""
             QTableWidget {
                 background-color: #E8F4F8;
                 border: 2px solid #333;
                 gridline-color: #333;
-                font-size: 12px;
+                font-size: 11px;
+                selection-background-color: #4A90E2;
             }
             QHeaderView::section {
                 background-color: #4A90E2;
                 color: white;
                 font-weight: bold;
-                padding: 5px;
+                padding: 4px;
                 border: 1px solid #333;
+                font-size: 10px;
             }
             QTableWidget::item {
-                padding: 5px;
+                padding: 3px;
                 border-bottom: 1px solid #ccc;
             }
+            QTableWidget::item:selected {
+                background-color: #357ABD;
+                color: white;
+            }
         """)
+        
+        # Set row height for better fit
+        self.verticalHeader().setDefaultSectionSize(25)
+        self.verticalHeader().hide()  # Hide row numbers
         
         self.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.setAlternatingRowColors(True)
@@ -989,14 +1005,19 @@ class POSMainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.current_order = []
-        self.order_items = []  # List of dictionaries containing order items
+        self.order_items = []  
         self.subtotal = 0.0
         self.discount_amount = 0.0
         self.discount_percentage = 0.0
-        self.tax_rate = 0.15  # 15% default tax
+        self.tax_rate = 0.15  
         self.tax_enabled = True
         self.current_payment = 0.0
         self.current_quantity_input = ""
+        
+        # Add pagination variables
+        self.current_product_page = 0
+        self.products_per_page = 16  # 4x4 grid
+        self.current_products_list = []
         
         # Initialize database manager
         self.db_manager = DatabaseManager()
@@ -1052,7 +1073,7 @@ class POSMainWindow(QMainWindow):
         # Add status bar
         status_message = "Ready - Scan barcode or search for products"
         if REPORTLAB_AVAILABLE:
-            status_message += " | Professional PDF receipts enabled"
+            status_message += " | PDF receipts enabled"
         else:
             status_message += " | Install ReportLab for PDF receipts: pip install reportlab"
             
@@ -1195,93 +1216,150 @@ class POSMainWindow(QMainWindow):
         help_menu.addAction(about_action)
         
     def create_product_panel(self):
-        """Create the left panel with product categories and navigation"""
+        """Create the left panel with optimized layout and space management"""
         panel = QWidget()
         layout = QVBoxLayout()
+        layout.setContentsMargins(5, 5, 5, 5)
+        layout.setSpacing(5)
         
-        # Search bar
+        # Search bar - compact
         search_layout = QHBoxLayout()
+        search_layout.setSpacing(5)
+        
         search_label = QLabel("Search:")
+        search_label.setMinimumWidth(50)
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("Product name or barcode...")
         self.search_input.textChanged.connect(self.search_products)
-        self.search_input.returnPressed.connect(self.on_search_enter)  # Handle Enter key
-        search_layout.addWidget(search_label)
-        search_layout.addWidget(self.search_input)
+        self.search_input.returnPressed.connect(self.on_search_enter)
         
-        # Barcode entry button
-        barcode_btn = QPushButton("Scan/Enter Barcode")
+        # Compact barcode button
+        barcode_btn = QPushButton("Scan")
+        barcode_btn.setMaximumWidth(60)
         barcode_btn.clicked.connect(self.manual_barcode_entry)
         barcode_btn.setStyleSheet("""
             QPushButton {
                 background-color: #2E8B57;
                 color: white;
                 font-weight: bold;
-                padding: 5px 10px;
+                padding: 5px;
                 border: none;
                 border-radius: 3px;
+                font-size: 10px;
             }
             QPushButton:hover {
                 background-color: #228B22;
             }
         """)
-        search_layout.addWidget(barcode_btn)
         
+        search_layout.addWidget(search_label)
+        search_layout.addWidget(self.search_input)
+        search_layout.addWidget(barcode_btn)
         layout.addLayout(search_layout)
         
-        # Product grid area
+        # Product grid area with fixed height for 4x4 grid
         scroll_area = QScrollArea()
+        scroll_area.setMaximumHeight(360)  # Fixed height for 4 rows of products (4 * 90px)
+        scroll_area.setMinimumHeight(360)
         scroll_widget = QWidget()
+        
+        # Create 4x4 grid layout
         self.product_grid = QGridLayout()
+        self.product_grid.setSpacing(5)
+        
+        # Set fixed row and column sizes for consistent 4x4 grid
+        for row in range(4):
+            self.product_grid.setRowMinimumHeight(row, 85)
+            self.product_grid.setRowStretch(row, 0)
+        
+        for col in range(4):
+            self.product_grid.setColumnMinimumWidth(col, 120)
+            self.product_grid.setColumnStretch(col, 1)
+        
         scroll_widget.setLayout(self.product_grid)
         scroll_area.setWidget(scroll_widget)
         scroll_area.setWidgetResizable(True)
-        
-        # Load products (initially from database)
-        self.load_products_from_database()
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         
         layout.addWidget(scroll_area)
         
-        # Navigation buttons
+        # Navigation buttons - compact
         nav_layout = QHBoxLayout()
+        nav_layout.setSpacing(5)
         
         prior_btn = QPushButton("◄ Prior")
-        prior_btn.setMinimumSize(100, 40)
+        prior_btn.setMaximumHeight(35)
+        prior_btn.clicked.connect(self.previous_products_page)
         prior_btn.setStyleSheet("""
             QPushButton {
                 background-color: #FFD700;
                 border: 2px solid #333;
                 border-radius: 5px;
                 font-weight: bold;
-                font-size: 14px;
+                font-size: 12px;
             }
+            QPushButton:hover { background-color: #FFC107; }
         """)
         
+        # Page indicator
+        self.page_label = QLabel("Page 1")
+        self.page_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.page_label.setStyleSheet("font-weight: bold; color: #333;")
+        
         next_btn = QPushButton("Next ►")
-        next_btn.setMinimumSize(100, 40)
+        next_btn.setMaximumHeight(35)
+        next_btn.clicked.connect(self.next_products_page)
         next_btn.setStyleSheet("""
             QPushButton {
                 background-color: #FFD700;
                 border: 2px solid #333;
                 border-radius: 5px;
                 font-weight: bold;
-                font-size: 14px;
+                font-size: 12px;
             }
+            QPushButton:hover { background-color: #FFC107; }
         """)
         
         nav_layout.addWidget(prior_btn)
-        nav_layout.addStretch()
+        nav_layout.addWidget(self.page_label)
         nav_layout.addWidget(next_btn)
-        
         layout.addLayout(nav_layout)
         
-        # Bottom category buttons
-        category_layout = QGridLayout()
-        self.load_category_buttons(category_layout)
-        layout.addLayout(category_layout)
+        # Category buttons - limited to 2x5 grid with fixed height
+        category_frame = QFrame()
+        category_frame.setMaximumHeight(180)  # Fixed height for 2 rows of categories
+        category_frame.setMinimumHeight(180)
+        category_frame.setFrameStyle(QFrame.Shape.Box | QFrame.Shadow.Sunken)
+        category_frame.setStyleSheet("QFrame { border: 1px solid #ccc; background-color: #f9f9f9; }")
         
-        # Function buttons
+        category_layout = QGridLayout()
+        category_layout.setSpacing(5)
+        category_layout.setContentsMargins(5, 5, 5, 5)
+        
+        # Set fixed dimensions for category grid (2 rows x 5 columns)
+        for row in range(2):
+            category_layout.setRowMinimumHeight(row, 80)
+            category_layout.setRowStretch(row, 0)
+        
+        for col in range(5):
+            category_layout.setColumnMinimumWidth(col, 100)
+            category_layout.setColumnStretch(col, 1)
+        
+        self.load_category_buttons(category_layout)
+        category_frame.setLayout(category_layout)
+        layout.addWidget(category_frame)
+        
+        # Function buttons - more compact grid
+        func_frame = QFrame()
+        func_frame.setMaximumHeight(120)  # Fixed height for function buttons
+        func_frame.setFrameStyle(QFrame.Shape.Box | QFrame.Shadow.Sunken)
+        func_frame.setStyleSheet("QFrame { border: 1px solid #ccc; background-color: #f9f9f9; }")
+        
         func_layout = QGridLayout()
+        func_layout.setSpacing(3)
+        func_layout.setContentsMargins(5, 5, 5, 5)
+        
         function_buttons = [
             ("Discount %", self.apply_percentage_discount), ("Customer", self.select_customer), 
             ("Discount Rs", self.apply_fixed_discount), ("Tax Toggle", self.toggle_tax), 
@@ -1292,15 +1370,16 @@ class POSMainWindow(QMainWindow):
         
         for i, (text, func) in enumerate(function_buttons):
             btn = QPushButton(text)
-            btn.setMinimumSize(80, 40)
+            btn.setMaximumHeight(25)
             btn.setStyleSheet("""
                 QPushButton {
                     background-color: #4A90E2;
-                    border: 2px solid #333;
-                    border-radius: 5px;
+                    border: 1px solid #333;
+                    border-radius: 3px;
                     color: white;
                     font-weight: bold;
-                    font-size: 10px;
+                    font-size: 9px;
+                    padding: 2px;
                 }
                 QPushButton:hover {
                     background-color: #357ABD;
@@ -1309,26 +1388,122 @@ class POSMainWindow(QMainWindow):
             btn.clicked.connect(func)
             func_layout.addWidget(btn, i // 5, i % 5)
         
-        layout.addLayout(func_layout)
+        func_frame.setLayout(func_layout)
+        layout.addWidget(func_frame)
+        
         panel.setLayout(layout)
         return panel
+
+    # Add pagination methods
+    def previous_products_page(self):
+        """Go to previous products page"""
+        if self.current_product_page > 0:
+            self.current_product_page -= 1
+            self.update_products_page()
+
+    def next_products_page(self):
+        """Go to next products page"""
+        max_pages = (len(self.current_products_list) - 1) // self.products_per_page
+        if self.current_product_page < max_pages:
+            self.current_product_page += 1
+            self.update_products_page()
+
+    def update_products_page(self):
+        """Update the product display for current page"""
+        start_idx = self.current_product_page * self.products_per_page
+        end_idx = start_idx + self.products_per_page
+        page_products = self.current_products_list[start_idx:end_idx]
+        
+        self.display_products(page_products)
+        
+        # Update page label
+        total_pages = max(1, (len(self.current_products_list) + self.products_per_page - 1) // self.products_per_page)
+        self.page_label.setText(f"Page {self.current_product_page + 1}/{total_pages}")
+
+    def load_products_from_database(self):
+        """Load products from database with pagination support"""
+        try:
+            products = self.db_manager.get_all_products()
+            self.current_products_list = products
+            self.current_product_page = 0
+            self.update_products_page()
+        except Exception as e:
+            print(f"Error loading products: {e}")
+            self.current_products_list = []
+            self.display_no_products_message()
+
+    def search_products(self, text):
+        """Search products with pagination support"""
+        if not text.strip():
+            self.load_products_from_database()
+            return
+        
+        try:
+            products = self.db_manager.search_products(text.strip())
+            self.current_products_list = products
+            self.current_product_page = 0
+            self.update_products_page()
+        except Exception as e:
+            print(f"Error searching products: {e}")
+            self.current_products_list = []
+            self.display_no_products_message()
+
+    def load_category_products(self, category_name):
+        """Load products from a specific category with pagination support"""
+        try:
+            if category_name == "All" or category_name == "All Products":
+                products = self.db_manager.get_all_products()
+            else:
+                products = self.db_manager.get_products_by_category(category_name)
+            
+            self.current_products_list = products
+            self.current_product_page = 0
+            self.update_products_page()
+            
+            # Update status bar to show current category
+            self.statusBar().showMessage(f"Category: {category_name} - {len(products)} products found", 3000)
+            
+        except Exception as e:
+            print(f"Error loading category products: {e}")
+            self.current_products_list = []
+            self.display_no_products_message()
+            self.statusBar().showMessage(f"Error loading category: {category_name}", 3000)
     
     def load_category_buttons(self, category_layout):
-        """Load category buttons from database"""
+        """Load category buttons in a limited 2x5 grid (10 categories max visible)"""
         try:
             categories = self.db_manager.get_categories()
+            
+            # Always add "All Products" button first
+            all_btn = ProductButton("All Products", "#4A90E2")
+            all_btn.clicked.connect(lambda: self.load_category_products("All"))
+            category_layout.addWidget(all_btn, 0, 0)
+            
             if not categories:
-                # Add a default "All Products" button if no categories
-                all_btn = ProductButton("All Products", "#4A90E2")
-                all_btn.clicked.connect(lambda: self.load_category_products("All"))
-                category_layout.addWidget(all_btn, 0, 0)
                 return
             
-            # Add categories from database
-            for i, (cat_id, cat_name, color_code) in enumerate(categories[:15]):  # Limit to 15 categories
+            # Limit to 9 categories (plus "All Products" = 10 total in 2x5 grid)
+            categories_to_show = categories[:9]
+            
+            # Add categories from database in 2x5 grid
+            for i, (cat_id, cat_name, color_code) in enumerate(categories_to_show):
                 btn = ProductButton(cat_name, color_code or "#4A90E2")
                 btn.clicked.connect(lambda checked, name=cat_name: self.load_category_products(name))
-                category_layout.addWidget(btn, i // 5, i % 5)
+                
+                # Calculate position: 5 columns, 2 rows
+                # Position 0 is taken by "All Products", so start from position 1
+                pos = i + 1
+                row = pos // 5
+                col = pos % 5
+                
+                category_layout.addWidget(btn, row, col)
+            
+            # If there are more than 9 categories, add a "More..." button
+            if len(categories) > 9:
+                more_btn = ProductButton("More...", "#666666")
+                more_btn.clicked.connect(self.show_more_categories)
+                # Place at position 9 (last slot in 2x5 grid)
+                category_layout.addWidget(more_btn, 1, 4)
                 
         except Exception as e:
             print(f"Error loading categories: {e}")
@@ -1336,7 +1511,90 @@ class POSMainWindow(QMainWindow):
             all_btn = ProductButton("All Products", "#4A90E2")
             all_btn.clicked.connect(lambda: self.load_category_products("All"))
             category_layout.addWidget(all_btn, 0, 0)
-        
+
+
+    def show_more_categories(self):
+        """Show a dialog with all categories for selection"""
+        try:
+            categories = self.db_manager.get_categories()
+            if not categories:
+                return
+            
+            # Create category selection dialog
+            dialog = QDialog(self)
+            dialog.setWindowTitle("Select Category")
+            dialog.setMinimumSize(400, 300)
+            
+            layout = QVBoxLayout()
+            
+            # Search box for categories
+            search_box = QLineEdit()
+            search_box.setPlaceholderText("Search categories...")
+            layout.addWidget(search_box)
+            
+            # Category list
+            category_list = QListWidget()
+            category_list.addItem("All Products")
+            
+            for cat_id, cat_name, color_code in categories:
+                category_list.addItem(cat_name)
+            
+            # Filter categories based on search
+            def filter_categories():
+                search_text = search_box.text().lower()
+                for i in range(category_list.count()):
+                    item = category_list.item(i)
+                    item.setHidden(search_text not in item.text().lower())
+            
+            search_box.textChanged.connect(filter_categories)
+            
+            # Double-click to select
+            def on_category_selected():
+                current_item = category_list.currentItem()
+                if current_item:
+                    category_name = current_item.text()
+                    self.load_category_products(category_name)
+                    dialog.close()
+            
+            category_list.itemDoubleClicked.connect(on_category_selected)
+            layout.addWidget(category_list)
+            
+            # Buttons
+            button_layout = QHBoxLayout()
+            select_btn = QPushButton("Select")
+            select_btn.clicked.connect(on_category_selected)
+            cancel_btn = QPushButton("Cancel")
+            cancel_btn.clicked.connect(dialog.close)
+            
+            button_layout.addWidget(select_btn)
+            button_layout.addWidget(cancel_btn)
+            layout.addLayout(button_layout)
+            
+            dialog.setLayout(layout)
+            dialog.exec()
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to load categories: {str(e)}")
+            
+    def load_category_products(self, category_name):
+        """Load products from a specific category"""
+        try:
+            if category_name == "All" or category_name == "All Products":
+                # Load all products
+                products = self.db_manager.get_all_products()
+            else:
+                # Load products from specific category
+                products = self.db_manager.get_products_by_category(category_name)
+            
+            self.display_products(products[:20])  # Show first 20 products
+            
+            # Update status bar to show current category
+            self.statusBar().showMessage(f"Category: {category_name} - {len(products)} products found", 3000)
+            
+        except Exception as e:
+            print(f"Error loading category products: {e}")
+            self.display_no_products_message()
+            self.statusBar().showMessage(f"Error loading category: {category_name}", 3000)
     def create_order_panel(self):
         """Create the right panel with order display and controls"""
         panel = QWidget()
@@ -1586,36 +1844,62 @@ class POSMainWindow(QMainWindow):
             self.display_no_products_message()
     
     def display_products(self, products):
-        """Display products in the grid"""
+        """Display products in a fixed 4x4 grid (16 products per page)"""
         # Clear existing products
         for i in reversed(range(self.product_grid.count())): 
-            self.product_grid.itemAt(i).widget().setParent(None)
+            widget = self.product_grid.itemAt(i).widget()
+            if widget:
+                widget.setParent(None)
         
         if not products:
             self.display_no_products_message()
             return
         
-        # Display products in grid
-        for i, product in enumerate(products):
+        # Display products in exactly 4x4 grid (16 products)
+        products_to_show = products[:16]  # Limit to 16 products for 4x4 grid
+        
+        for i, product in enumerate(products_to_show):
             product_data = {
                 'id': product[0],
                 'name': product[1],
                 'barcode': product[2],
                 'sale_price': product[5],
-                'category': product[6] if product[6] else 'General'
+                'category': product[6] if len(product) > 6 and product[6] else 'General'
             }
             
             # Determine color based on category or use default
             color = "#FF6B6B"  # Default color
-            if product[6]:  # Has category
+            if len(product) > 6 and product[6]:  # Has category
                 color = self.get_category_color(product[6])
             
             btn = ProductButton(product[1], color, product_data)
             btn.clicked.connect(lambda checked, data=product_data: self.add_product_to_order(data))
             
-            row = i // 5
-            col = i % 5
+            # Fixed 4x4 grid layout
+            row = i // 4  # 4 columns per row
+            col = i % 4
             self.product_grid.addWidget(btn, row, col)
+        
+        # Fill empty slots with placeholder buttons if less than 16 products
+        for i in range(len(products_to_show), 16):
+            placeholder = QPushButton("Empty Slot")
+            placeholder.setMinimumSize(120, 80)
+            placeholder.setMaximumSize(200, 120)
+            placeholder.setEnabled(False)
+            placeholder.setStyleSheet("""
+                QPushButton {
+                    background-color: #f0f0f0;
+                    border: 2px dashed #ccc;
+                    border-radius: 8px;
+                    color: #999;
+                    font-style: italic;
+                    font-size: 10px;
+                }
+            """)
+            
+            row = i // 4
+            col = i % 4
+            self.product_grid.addWidget(placeholder, row, col)
     
     def display_no_products_message(self):
         """Display message when no products are available"""
@@ -1635,7 +1919,7 @@ class POSMainWindow(QMainWindow):
     def get_category_color(self, category_name):
         """Get color for category (simplified version)"""
         # Simple hash-based color assignment
-        colors = ["#FF6B6B", "#4ECDC4", "#45B7D1", "#96CEB4", "#FFEAA7", "#DDA0DD", "#98D8C8", "#A29BFE"]
+        colors = ["#FF6B6B", "#4ECDC4", "#04C2ED", "#00BC64", "#FDC716", "#FF53FF", "#FF8147", "#4E41FF"]
         return colors[hash(category_name) % len(colors)]
     
     def search_products(self, text):
@@ -1839,7 +2123,7 @@ class POSMainWindow(QMainWindow):
                 pass
     
     def create_receipt(self):
-        """Create professional PDF receipt using ReportLab for 80x297mm paper"""
+        """Create professional PDF receipt using ReportLab for 80x297mm paper with compact layout"""
         if not REPORTLAB_AVAILABLE:
             # Fallback to text receipt if ReportLab not available
             return self.create_text_receipt()
@@ -1863,6 +2147,17 @@ class POSMainWindow(QMainWindow):
             c = canvas.Canvas(receipt_file, pagesize=(receipt_width, receipt_height))
             y_position = receipt_height - 10 * mm  # Start from top with margin
             
+            # Define compact column positions for 80mm width
+            left_margin = 1 * mm
+            right_margin = 1 * mm
+            usable_width = receipt_width - left_margin - right_margin  # 78mm usable
+            
+            # Compact column layout
+            item_col = left_margin              # Item name: 0-45mm (45mm width)
+            qty_col = left_margin + 45 * mm     # Qty: 45-55mm (10mm width)
+            price_col = left_margin + 55 * mm   # Price: 55-67mm (12mm width) 
+            total_col = left_margin + 67 * mm   # Total: 67-78mm (11mm width)
+            
             # Store Header
             c.setFont("Helvetica-Bold", 11)
             c.drawCentredString(receipt_width / 2, y_position, "WHOLESALE DEALER POS")
@@ -1879,99 +2174,116 @@ class POSMainWindow(QMainWindow):
             y_position -= 5 * mm
             
             # Separator line
-            c.line(2 * mm, y_position, receipt_width - 2 * mm, y_position)
+            c.line(left_margin, y_position, receipt_width - right_margin, y_position)
             y_position -= 4 * mm
             
             # Receipt Details
             receipt_number = f"R{datetime.now().strftime('%Y%m%d%H%M%S')}"
             c.setFont("Helvetica", 8)
-            c.drawString(2 * mm, y_position, f"Receipt #: {receipt_number}")
+            c.drawString(left_margin, y_position, f"Receipt #: {receipt_number}")
             y_position -= 3 * mm
-            c.drawString(2 * mm, y_position, f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+            c.drawString(left_margin, y_position, f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
             y_position -= 3 * mm
-            c.drawString(2 * mm, y_position, "Cashier: POS User")
+            c.drawString(left_margin, y_position, "Cashier: POS User")
             y_position -= 4 * mm
             
-            # Items Header
-            c.line(2 * mm, y_position, receipt_width - 2 * mm, y_position)
+            # Items Header with short labels to fit in 80mm
+            c.line(left_margin, y_position, receipt_width - right_margin, y_position)
             y_position -= 3 * mm
             
-            c.setFont("Helvetica-Bold", 8)
-            c.drawString(2 * mm, y_position, "Item")
-            c.drawString(receipt_width - 25 * mm, y_position, "Qty")
-            c.drawString(receipt_width - 15 * mm, y_position, "Price")
-            c.drawString(receipt_width - 5 * mm, y_position, "Total")
+            c.setFont("Helvetica-Bold", 7)  # Smaller font for headers
+            c.drawString(item_col, y_position, "Item")
+            c.drawString(qty_col, y_position, "Qty")
+            c.drawString(price_col, y_position, "Price")
+            c.drawString(total_col, y_position, "Total")  # Shortened to "Tot" to fit
             y_position -= 3 * mm
             
-            c.line(2 * mm, y_position, receipt_width - 2 * mm, y_position)
+            c.line(left_margin, y_position, receipt_width - right_margin, y_position)
             y_position -= 3 * mm
             
-            # Items
-            c.setFont("Helvetica", 7)
+            # Items with compact alignment
+            c.setFont("Helvetica", 6)  # Smaller font for items
             for item in self.order_items:
-                # Item name (truncate if too long)
-                item_name = item['description'][:25] if len(item['description']) > 25 else item['description']
-                c.drawString(2 * mm, y_position, item_name)
+                # Item name (truncate to fit in 45mm ≈ 18 chars at 6pt)
+                item_name = item['description']
+                if len(item_name) > 18:
+                    item_name = item_name[:15] + "..."
                 
-                # Quantity, Price, Total (right-aligned)
-                c.drawRightString(receipt_width - 20 * mm, y_position, f"{item['quantity']:.1f}")
-                c.drawRightString(receipt_width - 10 * mm, y_position, f"{item['price']:.2f}")
-                c.drawRightString(receipt_width - 2 * mm, y_position, f"{item['total']:.2f}")
+                c.drawString(item_col, y_position, item_name)
+                
+                # Quantity (right-aligned in 10mm space)
+                qty_text = f"{item['quantity']:.1f}"
+                c.drawRightString(qty_col + 9 * mm, y_position, qty_text)
+                
+                # Price (right-aligned in 12mm space)
+                price_text = f"{item['price']:.0f}"  # No decimals to save space
+                c.drawRightString(price_col + 11 * mm, y_position, price_text)
+                
+                # Total (right-aligned in 11mm space)
+                total_text = f"{item['total']:.0f}"  # No decimals to save space
+                c.drawRightString(total_col + 10 * mm, y_position, total_text)
+                
                 y_position -= 3.5 * mm
                 
                 # Check if we're running out of space
-                if y_position < 30 * mm:
+                if y_position < 35 * mm:
                     break
             
             # Totals Section
             y_position -= 2 * mm
-            c.line(2 * mm, y_position, receipt_width - 2 * mm, y_position)
+            c.line(left_margin, y_position, receipt_width - right_margin, y_position)
             y_position -= 4 * mm
             
-            c.setFont("Helvetica", 8)
-            c.drawString(2 * mm, y_position, "Subtotal:")
-            c.drawRightString(receipt_width - 2 * mm, y_position, f"{self.subtotal:.2f}")
-            y_position -= 3 * mm
-            
-            # Discount
-            if self.discount_amount > 0:
-                c.drawString(2 * mm, y_position, f"Discount ({self.discount_percentage:.0f}%):" if self.discount_percentage > 0 else "Discount:")
-                c.drawRightString(receipt_width - 2 * mm, y_position, f"-{self.discount_amount:.2f}")
-                y_position -= 3 * mm
-            
-            # Tax
+            # Calculate totals
             if self.tax_enabled:
                 tax_amount = (self.subtotal - self.discount_amount) * self.tax_rate
-                c.drawString(2 * mm, y_position, f"Tax ({int(self.tax_rate * 100)}%):")
-                c.drawRightString(receipt_width - 2 * mm, y_position, f"{tax_amount:.2f}")
-                y_position -= 3 * mm
             else:
                 tax_amount = 0
             
-            # Total
             total = self.subtotal - self.discount_amount + tax_amount
+            
+            c.setFont("Helvetica", 8)
+            
+            # Subtotal
+            c.drawString(left_margin, y_position, "Subtotal:")
+            c.drawRightString(receipt_width - right_margin, y_position, f"{self.subtotal:.2f}")
+            y_position -= 3 * mm
+            
+            # Discount (if applicable)
+            if self.discount_amount > 0:
+                c.drawString(left_margin, y_position, "Discount:")
+                c.drawRightString(receipt_width - right_margin, y_position, f"-{self.discount_amount:.2f}")
+                y_position -= 3 * mm
+            
+            # Tax (if applicable)
+            if self.tax_enabled and tax_amount > 0:
+                c.drawString(left_margin, y_position, f"Tax ({int(self.tax_rate * 100)}%):")
+                c.drawRightString(receipt_width - right_margin, y_position, f"{tax_amount:.2f}")
+                y_position -= 3 * mm
+            
+            # Total
             y_position -= 1 * mm
-            c.line(2 * mm, y_position, receipt_width - 2 * mm, y_position)
+            c.line(left_margin, y_position, receipt_width - right_margin, y_position)
             y_position -= 4 * mm
             
             c.setFont("Helvetica-Bold", 10)
-            c.drawString(2 * mm, y_position, "TOTAL:")
-            c.drawRightString(receipt_width - 2 * mm, y_position, f"{total:.2f}")
+            c.drawString(left_margin, y_position, "TOTAL:")
+            c.drawRightString(receipt_width - right_margin, y_position, f"{total:.2f}")
             y_position -= 5 * mm
             
             # Payment & Change
             c.setFont("Helvetica", 8)
-            c.drawString(2 * mm, y_position, "Payment:")
-            c.drawRightString(receipt_width - 2 * mm, y_position, f"{self.current_payment:.2f}")
+            c.drawString(left_margin, y_position, "Payment:")
+            c.drawRightString(receipt_width - right_margin, y_position, f"{self.current_payment:.2f}")
             y_position -= 3 * mm
             
             change = self.current_payment - total if self.current_payment > total else 0
-            c.drawString(2 * mm, y_position, "Change:")
-            c.drawRightString(receipt_width - 2 * mm, y_position, f"{change:.2f}")
+            c.drawString(left_margin, y_position, "Change:")
+            c.drawRightString(receipt_width - right_margin, y_position, f"{change:.2f}")
             y_position -= 5 * mm
             
             # Footer
-            c.line(2 * mm, y_position, receipt_width - 2 * mm, y_position)
+            c.line(left_margin, y_position, receipt_width - right_margin, y_position)
             y_position -= 4 * mm
             
             c.setFont("Helvetica", 8)
@@ -2012,59 +2324,83 @@ class POSMainWindow(QMainWindow):
             print(f"Error creating PDF receipt: {e}")
             # Return text receipt as fallback
             return self.create_text_receipt()
-    
+        
     def create_text_receipt(self):
-        """Fallback text receipt if ReportLab is not available"""
+        """Compact text receipt optimized for 80mm thermal paper (32 chars width)"""
         receipt_lines = []
         
-        # Header (40 characters wide for 80mm paper)
-        receipt_lines.append("========================================")
-        receipt_lines.append("       WHOLESALE DEALER POS")
-        receipt_lines.append("        Your Business Name")
-        receipt_lines.append("      123 Business Street")
-        receipt_lines.append("    City, State 12345")
+        # Header (32 characters wide for 80mm paper - more realistic)
+        receipt_lines.append("================================")
+        receipt_lines.append("     WHOLESALE DEALER POS")
+        receipt_lines.append("      Your Business Name")
+        receipt_lines.append("    123 Business Street")
+        receipt_lines.append("      City, State 12345")
         receipt_lines.append("    Phone: (555) 123-4567")
-        receipt_lines.append("========================================")
+        receipt_lines.append("================================")
         receipt_lines.append("")
         
         # Receipt info
         receipt_number = f"R{datetime.now().strftime('%Y%m%d%H%M%S')}"
         receipt_lines.append(f"Receipt #: {receipt_number}")
-        receipt_lines.append(f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        receipt_lines.append(f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
         receipt_lines.append(f"Cashier: POS User")
-        receipt_lines.append("----------------------------------------")
+        receipt_lines.append("--------------------------------")
         receipt_lines.append("")
         
-        # Items
-        receipt_lines.append("Item              Qty  Price    Total")
-        receipt_lines.append("----------------------------------------")
+        # Compact items header (32 chars total)
+        receipt_lines.append("Item            Qty  Prc  Tot")
+        receipt_lines.append("--------------------------------")
         
+        # Items with tight alignment for 32 chars
         for item in self.order_items:
-            name = item['description'][:17]
-            qty_str = f"{item['quantity']:.1f}".rjust(3)
-            price_str = f"{item['price']:.2f}".rjust(6)
-            total_str = f"{item['total']:.2f}".rjust(8)
-            receipt_lines.append(f"{name:<17} {qty_str} {price_str} {total_str}")
+            # Item name (15 chars max)
+            name = item['description'][:15].ljust(15)
+            # Qty (3 chars)
+            qty_str = f"{item['quantity']:.0f}".rjust(3)
+            # Price (4 chars)
+            price_str = f"{item['price']:.0f}".rjust(4)
+            # Total (5 chars)
+            total_str = f"{item['total']:.0f}".rjust(5)
+            
+            # Create 32-char line: 15 + 1 + 3 + 1 + 4 + 1 + 5 = 30 chars (with spaces)
+            line = f"{name} {qty_str} {price_str} {total_str}"
+            receipt_lines.append(line)
         
-        receipt_lines.append("----------------------------------------")
+        receipt_lines.append("--------------------------------")
         receipt_lines.append("")
         
-        # Totals
-        receipt_lines.append(f"{'Subtotal:':<30} {self.subtotal:>9.2f}")
+        # Totals with compact alignment
+        receipt_lines.append(f"{'Subtotal:':<20} {self.subtotal:>10.2f}")
         
         if self.discount_amount > 0:
-            receipt_lines.append(f"{'Discount:':<30} -{self.discount_amount:>8.2f}")
+            receipt_lines.append(f"{'Discount:':<20} -{self.discount_amount:>9.2f}")
         
         if self.tax_enabled:
             tax_amount = (self.subtotal - self.discount_amount) * self.tax_rate
-            receipt_lines.append(f"{'Tax:':<30} {tax_amount:>9.2f}")
+            receipt_lines.append(f"{'Tax:':<20} {tax_amount:>10.2f}")
         else:
             tax_amount = 0
         
         total = self.subtotal - self.discount_amount + tax_amount
-        receipt_lines.append("========================================")
-        receipt_lines.append(f"{'TOTAL:':<30} {total:>9.2f}")
-        receipt_lines.append("========================================")
+        receipt_lines.append("================================")
+        receipt_lines.append(f"{'TOTAL:':<20} {total:>10.2f}")
+        receipt_lines.append("================================")
+        receipt_lines.append("")
+        
+        # Payment info
+        receipt_lines.append(f"{'Payment:':<20} {self.current_payment:>10.2f}")
+        change = self.current_payment - total if self.current_payment > total else 0
+        receipt_lines.append(f"{'Change:':<20} {change:>10.2f}")
+        receipt_lines.append("")
+        
+        # Footer
+        receipt_lines.append("================================")
+        receipt_lines.append("    Thank you for your business!")
+        receipt_lines.append("       Please come again!")
+        receipt_lines.append("")
+        receipt_lines.append("      Return Policy: 30 days")
+        receipt_lines.append("   Keep this receipt for returns")
+        receipt_lines.append("================================")
         
         # Store data for fallback
         self.last_receipt_data = {
@@ -2074,7 +2410,7 @@ class POSMainWindow(QMainWindow):
             'tax_amount': tax_amount,
             'total_amount': total,
             'payment_amount': self.current_payment,
-            'change_amount': self.current_payment - total if self.current_payment > total else 0,
+            'change_amount': change,
             'sale_date': datetime.now().isoformat()
         }
         
@@ -2138,7 +2474,6 @@ class POSMainWindow(QMainWindow):
             if receipt_data and os.path.exists(receipt_data):
                 reply = QMessageBox.question(
                     self, "Receipt Ready", 
-                    "Professional PDF receipt created!\n\n"
                     "Choose action:\n"
                     "• Yes: Print directly to thermal printer\n"
                     "• No: Preview and print options\n"
@@ -2280,7 +2615,14 @@ class POSMainWindow(QMainWindow):
             QMessageBox.critical(self, "Error", f"Failed to open product management: {str(e)}")
     
     def open_category_management(self):
-        QMessageBox.information(self, "Category Management", "Category management window will be implemented in separate module.")
+        """Open category management dialog"""
+        try:
+            dialog = CategoryManagementDialog(self)
+            dialog.exec()
+            # Refresh products and categories after dialog closes
+            self.load_products_from_database()
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to open category management: {str(e)}")
     
     def open_inventory_management(self):
         QMessageBox.information(self, "Inventory Management", "Inventory management window will be implemented in separate module.")
@@ -2315,7 +2657,6 @@ class POSMainWindow(QMainWindow):
     def show_reportlab_help(self):
         """Show ReportLab installation help"""
         help_text = """
-📄 Professional PDF Receipts with ReportLab
 
 🔧 Installation Instructions:
 
@@ -2517,7 +2858,6 @@ Built with: PyQt6 + SQLite
             if REPORTLAB_AVAILABLE:
                 QMessageBox.information(self, "Payment Complete", 
                                     f"Payment processed successfully!\n\n"
-                                    f"📄 Professional PDF receipt created\n"
                                     f"💾 Sale {'saved' if sale_saved else 'not saved'} to database\n"
                                     f"🖨️ Ready for thermal printer\n\n"
                                     f"Receipt: {self.last_receipt_data.get('receipt_number', 'N/A')}")

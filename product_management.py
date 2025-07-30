@@ -112,6 +112,93 @@ class DatabaseManager:
             if not self.barcode_exists(barcode):
                 return barcode
             
+    def get_products_by_category(self, category_name):
+        """Get products by category name"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        try:
+            # First, try to get category ID
+            cursor.execute('SELECT id FROM categories WHERE name = ?', (category_name,))
+            category_result = cursor.fetchone()
+            
+            if category_result:
+                category_id = category_result[0]
+                cursor.execute('''
+                    SELECT id, name, barcode, '', quantity, sale_price, '', '', 0 
+                    FROM products 
+                    WHERE category_id = ?
+                    ORDER BY name
+                    LIMIT 50
+                ''', (category_id,))
+            else:
+                # If category not found, return empty list
+                return []
+                
+            products = cursor.fetchall()
+            return products
+            
+        except Exception as e:
+            print(f"Error getting products by category: {e}")
+            return []
+        finally:
+            conn.close()
+
+    def get_categories(self):
+        """Get all categories"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        try:
+            # Create categories table if it doesn't exist
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS categories (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT UNIQUE NOT NULL,
+                    color_code TEXT DEFAULT '#4A90E2'
+                )
+            ''')
+            
+            # Add category_id column to products table if it doesn't exist
+            try:
+                cursor.execute('ALTER TABLE products ADD COLUMN category_id INTEGER')
+            except sqlite3.OperationalError:
+                # Column already exists
+                pass
+            
+            # Get all categories
+            cursor.execute('SELECT id, name, color_code FROM categories ORDER BY name')
+            categories = cursor.fetchall()
+            
+            # If no categories exist, create some default ones
+            if not categories:
+                default_categories = [
+                    ('General', '#4A90E2'),
+                    ('Food', '#FF6B6B'),
+                    ('Beverages', '#4ECDC4'),
+                    ('Electronics', '#45B7D1'),
+                    ('Clothing', '#96CEB4'),
+                    ('Books', '#FFEAA7')
+                ]
+                
+                for cat_name, cat_color in default_categories:
+                    cursor.execute('INSERT OR IGNORE INTO categories (name, color_code) VALUES (?, ?)', 
+                                (cat_name, cat_color))
+                
+                conn.commit()
+                
+                # Fetch categories again
+                cursor.execute('SELECT id, name, color_code FROM categories ORDER BY name')
+                categories = cursor.fetchall()
+            
+            return categories
+            
+        except Exception as e:
+            print(f"Error getting categories: {e}")
+            return []
+        finally:
+            conn.close()
+            
     def save_sale(self, sale_data, sale_items):
             """Save sale and items to database"""
             conn = sqlite3.connect(self.db_path)
